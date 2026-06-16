@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Dashboard — Douceur</title>
+  <link rel="stylesheet" href="assets/css/style.css"/>
+  <!-- Chart.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <style>
+    .charts-row {
+      display: grid;
+      grid-template-columns: 1fr 1.6fr;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .chart-card {
+      background: #161a27;
+      border: 1px solid #1e2130;
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    .chart-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .chart-card-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: #e2e8f0;
+    }
+    .chart-pill {
+      font-size: 10px;
+      padding: 3px 9px;
+      border-radius: 20px;
+      background: #1a1f32;
+      color: #8892a4;
+      border: 1px solid #2a2f45;
+    }
+    /* Donut layout: canvas left, legend right */
+    .donut-wrap {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    .donut-canvas-wrap {
+      position: relative;
+      width: 140px;
+      height: 140px;
+      flex-shrink: 0;
+    }
+    .donut-center {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+    .donut-center-num  { font-size: 22px; font-weight: 600; color: #e2e8f0; line-height: 1; }
+    .donut-center-lbl  { font-size: 9px; color: #4a5168; letter-spacing: 1px; text-transform: uppercase; margin-top: 3px; }
+    .donut-legend      { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; }
+    .donut-legend-item { display: flex; align-items: center; gap: 8px; }
+    .legend-dot        { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+    .legend-label      { font-size: 12px; color: #8892a4; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .legend-val        { font-size: 12px; font-weight: 500; color: #e2e8f0; }
+    .legend-pct        { font-size: 11px; color: #4a5168; min-width: 34px; text-align: right; }
+  </style>
+</head>
+<body>
+<div class="layout" id="app-shell"></div>
+<div id="toast"></div>
+
+<script src="assets/js/utils.js"></script>
+<script src="assets/js/shell.js"></script>
+<script>
+renderShell();
+
+const PALETTE = ['#22c55e','#c084fc','#f59e0b','#60a5fa','#f87171','#e879a0','#34d399','#a78bfa'];
+let donutChart = null;
+let barChart   = null;
+
+// ── State ──
+let periodType    = 'daily';
+let selectedDate  = new Date().toISOString().slice(0, 10);
+
+// ── Init ──
+async function init() {
+  const pc = document.getElementById('page-content');
+  pc.innerHTML = '<div class="loading">กำลังโหลด...</div>';
+
+  let data;
+  try {
+    data = await apiFetch(`/dashboard?period_type=${periodType}&selected_date=${selectedDate}`);
+  } catch (e) {
+    pc.innerHTML = `<div class="empty">${e.message}</div>`;
+    return;
+  }
+
+  const t = data.today;
+
+  // ── period label ──
+  const periodLabel = {daily:'รายวัน', monthly:'รายเดือน', yearly:'รายปี'}[periodType];
+  const chartLabel  = {daily:'7 วันล่าสุด', monthly:'7 เดือนล่าสุด', yearly:'7 ปีล่าสุด'}[periodType];
+
+  // ── date input type & value ──
+  const inputType  = {daily:'date', monthly:'month', yearly:'number'}[periodType];
+  const inputValue = periodType === 'yearly' ? selectedDate.slice(0,4)
+                   : periodType === 'monthly' ? selectedDate.slice(0,7)
+                   : selectedDate;
+
+  pc.innerHTML = `
+    <div class="page-header">
+      <div>
+        <div class="page-title">Dashboard</div>
+        <div style="font-size:12px;color:var(--text4);margin-top:2px;">
+          ${new Date().toLocaleDateString('th-TH',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}
+        </div>
+      </div>
+
+      <!-- ── Period Picker ── -->
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="display:flex;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:3px;gap:2px;">
+          ${['daily','monthly','yearly'].map(p => `
+            <button onclick="setPeriod('${p}')"
+              style="padding:5px 12px;border-radius:6px;border:none;font-size:11px;font-weight:500;
+                     font-family:'Inter',sans-serif;cursor:pointer;transition:all 0.12s;
+                     background:${periodType===p?'var(--bg3)':'transparent'};
+                     color:${periodType===p?'var(--text)':'var(--text3)'};">
+              ${{daily:'รายวัน',monthly:'รายเดือน',yearly:'รายปี'}[p]}
+            </button>`).join('')}
+        </div>
+        <input id="date-input" type="${inputType}" value="${inputValue}"
+          ${periodType==='yearly'?'min="2000" max="2100"':''}
+          onchange="setDate(this.value)"
+          style="height:32px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;
+                 padding:0 12px;font-size:12px;font-family:'Inter',sans-serif;color:var(--text2);
+                 outline:none;color-scheme:dark;"/>
+      </div>
+    </div>
+
+    <!-- ── Summary cards ── -->
+    <div class="stats-row" style="border-radius:10px;border:1px solid var(--border);overflow:hidden;margin-bottom:20px;">
+      <div class="stat">
+        <div class="stat-label">รายรับ (${periodLabel})</div>
+        <div class="stat-val" id="card-revenue">${formatThb(t.revenue)}</div>
+        <div class="stat-hint up">ยอดขายสะสม</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">รายจ่าย (${periodLabel})</div>
+        <div class="stat-val" id="card-expenses">${formatThb(t.expenses)}</div>
+        <div class="stat-hint dn">ต้นทุน + ค่าใช้จ่าย</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">กำไรสุทธิ</div>
+        <div class="stat-val" id="card-profit"
+          style="color:${t.net_profit>=0?'var(--green)':'var(--red)'}">
+          ${formatThb(t.net_profit)}
+        </div>
+        <div class="stat-hint up">หลังหักต้นทุนทั้งหมด</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">ขายดีสุด</div>
+        <div class="stat-val" id="card-best" style="font-size:14px;padding-top:3px;">${t.best_seller.name}</div>
+        <div class="stat-hint up" id="card-best-qty">${t.best_seller.quantity} ชิ้น</div>
+      </div>
+    </div>
+
+    <!-- ── Charts row ── -->
+    <div class="charts-row">
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <span class="chart-card-title">สรุปรายจ่าย</span>
+          <span class="chart-pill">${periodLabel}</span>
+        </div>
+        <div class="donut-wrap">
+          <div class="donut-canvas-wrap">
+            <canvas id="donutChart"></canvas>
+            <div class="donut-center">
+              <span class="donut-center-num" id="donut-total">—</span>
+              <span class="donut-center-lbl">รายการ</span>
+            </div>
+          </div>
+          <div class="donut-legend" id="donut-legend"></div>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <span class="chart-card-title">รายรับ vs รายจ่าย</span>
+          <span class="chart-pill">${chartLabel}</span>
+        </div>
+        <div style="position:relative;height:160px;">
+          <canvas id="barChart"></canvas>
+        </div>
+        <div style="display:flex;gap:16px;margin-top:10px;">
+          <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:#8892a4;">
+            <span style="width:10px;height:10px;border-radius:2px;background:#22c55e;display:inline-block;"></span>รายรับ
+          </span>
+          <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:#8892a4;">
+            <span style="width:10px;height:10px;border-radius:2px;background:#f59e0b;display:inline-block;"></span>รายจ่าย
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Low stock ── -->
+    <div class="section-header">
+      <span class="section-title">สินค้าใกล้หมดสต็อก</span>
+      <a href="inventory.html" style="font-size:12px;color:var(--purple);text-decoration:none;">ดูทั้งหมด →</a>
+    </div>
+    <div id="low-stock-list">
+      ${data.low_stock.length === 0
+        ? '<div class="empty">ไม่มีสินค้าใกล้หมด</div>'
+        : data.low_stock.map(p => `
+          <div class="row-item">
+            <div class="row-left">
+              <div class="row-title-line">
+                <div class="status-dot ${p.current_stock<=0?'dot-gray':'dot-amber'}"></div>
+                <span class="row-cat">${p.category}</span>
+                <span class="slash">/</span>
+                <span class="row-name">${p.name}</span>
+              </div>
+              <div class="row-sub">คงเหลือ ${p.current_stock} · ขั้นต่ำ ${p.low_stock_threshold}</div>
+            </div>
+            ${p.current_stock<=0
+              ? '<span class="badge badge-red">หมดสต็อก</span>'
+              : '<span class="badge badge-pink">ใกล้หมด</span>'}
+            <svg class="chevron" width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>`).join('')}
+    </div>`;
+
+  renderDonut(data.expense_breakdown);
+  renderBar(data.weekly_chart);
+}
+
+// ── Period/Date handlers ──
+function setPeriod(p) {
+  periodType = p;
+  // reset selected date to sensible default
+  const now = new Date();
+  if (p === 'daily')   selectedDate = now.toISOString().slice(0,10);
+  if (p === 'monthly') selectedDate = now.toISOString().slice(0,7);
+  if (p === 'yearly')  selectedDate = String(now.getFullYear());
+  init();
+}
+
+function setDate(val) {
+  selectedDate = val;
+  init();
+}
+
+// ── Donut Chart ──
+function renderDonut(breakdown) {
+  if (!breakdown || breakdown.length === 0) {
+    const el = document.getElementById('donut-legend');
+    if (el) el.innerHTML = '<div style="font-size:12px;color:var(--text4);">ไม่มีข้อมูล</div>';
+    const tot = document.getElementById('donut-total');
+    if (tot) tot.textContent = '0';
+    return;
+  }
+  const total  = breakdown.reduce((s, e) => s + e.amount, 0);
+  const labels = breakdown.map(e => e.label);
+  const amounts= breakdown.map(e => e.amount);
+  const colors = breakdown.map((_, i) => PALETTE[i % PALETTE.length]);
+
+  document.getElementById('donut-total').textContent = breakdown.length;
+
+  document.getElementById('donut-legend').innerHTML = breakdown.map((e, i) => {
+    const pct = total > 0 ? Math.round(e.amount / total * 100) : 0;
+    return `<div class="donut-legend-item">
+      <div class="legend-dot" style="background:${colors[i]};"></div>
+      <span class="legend-label">${e.label}</span>
+      <span class="legend-val">${formatThb(e.amount)}</span>
+      <span class="legend-pct">${pct}%</span>
+    </div>`;
+  }).join('');
+
+  if (donutChart) donutChart.destroy();
+  donutChart = new Chart(document.getElementById('donutChart'), {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data: amounts, backgroundColor: colors, borderWidth: 0, hoverOffset: 6 }] },
+    options: {
+      responsive: true, maintainAspectRatio: true, cutout: '68%',
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => {
+          const pct = total > 0 ? Math.round(ctx.parsed / total * 100) : 0;
+          return ` ${formatThb(ctx.parsed)} (${pct}%)`;
+        }}},
+      },
+    },
+  });
+}
+
+// ── Bar Chart ──
+function renderBar(weekly) {
+  if (!weekly || weekly.length === 0) return;
+
+  // label ตาม period
+  const labels = weekly.map(d => {
+    if (periodType === 'yearly')  return d.date;
+    if (periodType === 'monthly') {
+      const [, m] = d.date.split('-');
+      return ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'][+m];
+    }
+    const dayNames = ['อา.','จ.','อ.','พ.','พฤ.','ศ.','ส.'];
+    return dayNames[new Date(d.date).getDay()];
+  });
+
+  if (barChart) barChart.destroy();
+  barChart = new Chart(document.getElementById('barChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label:'รายรับ',  data: weekly.map(d=>d.revenue),  backgroundColor:'#22c55e', borderRadius:4, borderSkipped:false },
+        { label:'รายจ่าย', data: weekly.map(d=>d.expenses), backgroundColor:'#f59e0b', borderRadius:4, borderSkipped:false },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${formatThb(ctx.parsed.y)}` }}},
+      scales: {
+        x: { ticks: { color:'#4a5168', font:{size:11} }, grid:{display:false}, border:{display:false} },
+        y: { ticks: { color:'#4a5168', font:{size:10}, callback: v => '฿'+(v>=1000?(v/1000).toFixed(1)+'k':v) },
+             grid:{color:'#1e2130'}, border:{display:false} },
+      },
+    },
+  });
+}
+
+init();
+</script>
+</body>
+</html>

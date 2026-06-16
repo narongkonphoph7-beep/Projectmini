@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>สินค้า — Douceur</title>
+  <link rel="stylesheet" href="assets/css/style.css"/>
+</head>
+<body>
+<div class="layout" id="app-shell"></div>
+<div id="toast"></div>
+
+<script src="assets/js/utils.js"></script>
+<script src="assets/js/shell.js"></script>
+<script>
+renderShell();
+
+let products = [];
+let editingId = null;
+
+async function loadProducts() {
+  const list = document.getElementById('product-list');
+  list.innerHTML = '<div class="loading">กำลังโหลด...</div>';
+  try {
+    products = await apiFetch('/products');
+    renderList();
+  } catch (e) {
+    list.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+function renderList() {
+  const list = document.getElementById('product-list');
+  if (products.length === 0) {
+    list.innerHTML = '<div class="empty">ยังไม่มีสินค้า</div>';
+    return;
+  }
+  list.innerHTML = products.map(p => `
+    <div class="row-item" style="gap:12px;">
+      <div class="row-left">
+        <div class="row-title-line">
+          <div class="status-dot ${stockDot(p.current_stock, p.low_stock_threshold)}"></div>
+          <span class="row-cat">${p.category}</span>
+          <span class="slash">/</span>
+          <span class="row-name">${p.name}</span>
+        </div>
+        <div class="row-sub">ต้นทุน ${formatThb(p.cost_price)} · ราคาขาย ${formatThb(p.selling_price)} · สต็อก ${p.current_stock}</div>
+      </div>
+      ${stockBadge(p.current_stock, p.low_stock_threshold)}
+      <button onclick="openEdit('${p.id}')" style="margin-left:8px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">แก้ไข</button>
+      <button onclick="deleteProduct('${p.id}')" style="background:var(--red-bg);border:1px solid #3a2020;color:var(--red);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">ลบ</button>
+    </div>`).join('');
+}
+
+function openAdd() {
+  editingId = null;
+  document.getElementById('form-title').textContent = 'เพิ่มสินค้าใหม่';
+  document.getElementById('f-name').value = '';
+  document.getElementById('f-cat').value = 'เบเกอรี่';
+  document.getElementById('f-cost').value = '';
+  document.getElementById('f-sell').value = '';
+  document.getElementById('f-threshold').value = '10';
+  document.getElementById('product-form').style.display = 'block';
+}
+
+function openEdit(id) {
+  const p = products.find(x => x.id === id);
+  if (!p) return;
+  editingId = id;
+  document.getElementById('form-title').textContent = 'แก้ไขสินค้า';
+  document.getElementById('f-name').value = p.name;
+  document.getElementById('f-cat').value = p.category;
+  document.getElementById('f-cost').value = p.cost_price;
+  document.getElementById('f-sell').value = p.selling_price;
+  document.getElementById('f-threshold').value = p.low_stock_threshold;
+  document.getElementById('product-form').style.display = 'block';
+}
+
+function closeForm() {
+  document.getElementById('product-form').style.display = 'none';
+}
+
+async function saveProduct() {
+  const body = {
+    name:                document.getElementById('f-name').value.trim(),
+    category:            document.getElementById('f-cat').value,
+    cost_price:          parseFloat(document.getElementById('f-cost').value) || 0,
+    selling_price:       parseFloat(document.getElementById('f-sell').value) || 0,
+    low_stock_threshold: parseInt(document.getElementById('f-threshold').value) || 10,
+  };
+  if (!body.name) return showToast('กรุณากรอกชื่อสินค้า', 'error');
+
+  try {
+    if (editingId) {
+      await apiFetch(`/products/${editingId}`, { method: 'PUT', body: JSON.stringify(body) });
+      showToast('แก้ไขสินค้าเรียบร้อย');
+    } else {
+      await apiFetch('/products', { method: 'POST', body: JSON.stringify(body) });
+      showToast('เพิ่มสินค้าเรียบร้อย');
+    }
+    closeForm();
+    loadProducts();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+async function deleteProduct(id) {
+  if (!confirm('ยืนยันลบสินค้านี้?')) return;
+  try {
+    await apiFetch(`/products/${id}`, { method: 'DELETE' });
+    showToast('ลบสินค้าเรียบร้อย');
+    loadProducts();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+document.getElementById('page-content').innerHTML = `
+  <div class="page-header">
+    <span class="page-title">สินค้าทั้งหมด</span>
+    <button class="btn-primary" onclick="openAdd()">+ เพิ่มสินค้า</button>
+  </div>
+
+  <div class="form-box" id="product-form" style="display:none;">
+    <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:14px;" id="form-title">เพิ่มสินค้าใหม่</div>
+    <div class="form-row col2">
+      <div class="field"><label>ชื่อสินค้า</label><input id="f-name" placeholder="เช่น ครัวซองต์เนย"/></div>
+      <div class="field">
+        <label>หมวดหมู่</label>
+        <select id="f-cat">
+          <option>เบเกอรี่</option>
+          <option>ของหวาน</option>
+          <option>วัตถุดิบ</option>
+          <option>บรรจุภัณฑ์</option>
+          <option>เครื่องดื่ม</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row col3">
+      <div class="field"><label>ราคาต้นทุน (฿)</label><input id="f-cost" type="number" min="0" placeholder="0"/></div>
+      <div class="field"><label>ราคาขาย (฿)</label><input id="f-sell" type="number" min="0" placeholder="0"/></div>
+      <div class="field"><label>สต็อกขั้นต่ำ</label><input id="f-threshold" type="number" min="0" value="10"/></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn-cancel" onclick="closeForm()">ยกเลิก</button>
+      <button class="btn-primary" onclick="saveProduct()">บันทึก</button>
+    </div>
+  </div>
+
+  <div id="product-list"></div>`;
+
+loadProducts();
+</script>
+</body>
+</html>

@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>รายรับ-รายจ่าย — Douceur</title>
+  <link rel="stylesheet" href="assets/css/style.css"/>
+</head>
+<body>
+<div class="layout" id="app-shell"></div>
+<div id="toast"></div>
+
+<script src="assets/js/utils.js"></script>
+<script src="assets/js/shell.js"></script>
+<script>
+renderShell();
+
+let products = [];
+let activeTab = 'sales';
+
+async function init() {
+  try { products = await apiFetch('/products'); } catch (_) {}
+
+  const pc = document.getElementById('page-content');
+  pc.innerHTML = `
+    <div class="page-header">
+      <span class="page-title">รายรับ-รายจ่าย</span>
+      <div class="type-toggle">
+        <button class="tgl in on" id="tab-sales"    onclick="switchTab('sales')">รายรับ (ขาย)</button>
+        <button class="tgl out"   id="tab-expenses" onclick="switchTab('expenses')">รายจ่าย</button>
+      </div>
+    </div>
+    <div id="tab-content"></div>`;
+
+  renderTab();
+}
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.getElementById('tab-sales').className    = 'tgl in'  + (tab === 'sales'    ? ' on' : '');
+  document.getElementById('tab-expenses').className = 'tgl out' + (tab === 'expenses' ? ' on' : '');
+  renderTab();
+}
+
+function renderTab() {
+  if (activeTab === 'sales') renderSales();
+  else renderExpenses();
+}
+
+/* ── Sales ── */
+async function renderSales() {
+  document.getElementById('tab-content').innerHTML = `
+    <div class="form-box">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:12px;">บันทึกรายรับ</div>
+
+      <div class="form-row col3">
+        <div class="field">
+          <label>ช่องทางรับเงิน</label>
+          <select id="s-payment">
+            <option value="เงินสด">เงินสด</option>
+            <option value="เงินโอน">เงินโอน</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>ประเภทการขาย</label>
+          <select id="s-saletype">
+            <option value="ทั่วไป">ทั่วไป</option>
+            <option value="เสริม">เสริม</option>
+            <option value="เค้ก">เค้ก</option>
+            <option value="รถทัวร์">รถทัวร์</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>วันที่</label>
+          <input id="s-date" type="date" value="${new Date().toISOString().slice(0,10)}"/>
+        </div>
+      </div>
+
+      <div class="form-row col2">
+        <div class="field">
+          <label>จำนวนเงิน (฿)</label>
+          <input id="s-amount" type="number" min="0" placeholder="0"/>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn-green" onclick="submitSale()">บันทึกรายรับ</button>
+      </div>
+    </div>
+
+    <div class="section-header"><span class="section-title">รายการล่าสุด</span></div>
+    <div id="sales-list"><div class="loading">กำลังโหลด...</div></div>`;
+
+  loadSales();
+}
+
+async function submitSale() {
+  const body = {
+    amount:       parseFloat(document.getElementById('s-amount').value) || 0,
+    payment_type: document.getElementById('s-payment').value,
+    sale_type:    document.getElementById('s-saletype').value,
+    date:         document.getElementById('s-date').value,
+  };
+  if (!body.amount) return showToast('กรุณากรอกจำนวนเงิน', 'error');
+  try {
+    await apiFetch('/sales', { method: 'POST', body: JSON.stringify(body) });
+    showToast(`บันทึกแล้ว — ${formatThb(body.amount)}`);
+    document.getElementById('s-amount').value = '';
+    loadSales();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+async function loadSales() {
+  const el = document.getElementById('sales-list');
+  if (!el) return;
+  try {
+    const data = await apiFetch('/sales');
+    if (!data.length) { el.innerHTML = '<div class="empty">ยังไม่มีรายการ</div>'; return; }
+    el.innerHTML = data.slice(0,30).map(s => `
+      <div class="log-item">
+        <div class="log-badge in">ขาย</div>
+        <div class="log-info">
+          <div class="log-name">${s.product_name}
+            <span style="font-size:10px;color:var(--text4);margin-left:6px;">${s.sale_type || ''} · ${s.payment_type || ''}</span>
+          </div>
+          <div class="log-meta">จำนวน ${s.quantity} ชิ้น</div>
+        </div>
+        <div>
+          <div class="log-qty in">${formatThb(s.total_price)}</div>
+          <div class="log-time">${formatDate(s.date)}</div>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+/* ── Expenses ── */
+async function renderExpenses() {
+  document.getElementById('tab-content').innerHTML = `
+    <div class="form-box">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:12px;">บันทึกรายจ่าย</div>
+      <div class="form-row col2">
+        <div class="field">
+          <label>หมวดหมู่</label>
+          <select id="e-cat" onchange="updateExpenseDesc(this.value)">
+            <option value="ซื้อของเข้า">ซื้อของเข้า</option>
+            <option value="ค่าน้ำ">ค่าน้ำ</option>
+            <option value="ค่าไฟ">ค่าไฟ</option>
+            <option value="เงินเดือน">เงินเดือน</option>
+            <option value="อื่นๆ">อื่นๆ (พิมพ์เอง)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>รายละเอียด</label>
+          <input id="e-desc" placeholder="พิมพ์รายละเอียดเพิ่มเติม..."/>
+        </div>
+      </div>
+      <div class="form-row col2">
+        <div class="field">
+          <label>จำนวนเงิน (฿)</label>
+          <input id="e-amount" type="number" min="0" placeholder="0"/>
+        </div>
+        <div class="field">
+          <label>วันที่</label>
+          <input id="e-date" type="date" value="${new Date().toISOString().slice(0,10)}"/>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn-red" onclick="submitExpense()">บันทึกรายจ่าย</button>
+      </div>
+    </div>
+    <div class="section-header"><span class="section-title">รายจ่ายล่าสุด</span></div>
+    <div id="exp-list"><div class="loading">กำลังโหลด...</div></div>`;
+
+  loadExpenses();
+}
+
+function updateExpenseDesc(cat) {
+  const descInput = document.getElementById('e-desc');
+  if (cat === 'อื่นๆ') {
+    descInput.value = '';
+    descInput.focus();
+  } else {
+    descInput.value = cat;
+  }
+}
+
+async function submitExpense() {
+  const cat    = document.getElementById('e-cat').value;
+  const desc   = document.getElementById('e-desc').value.trim();
+  const body = {
+    description: cat === 'อื่นๆ' ? (desc || 'อื่นๆ') : (desc || cat),
+    amount:      parseFloat(document.getElementById('e-amount').value) || 0,
+    date:        document.getElementById('e-date').value,
+  };
+  if (!body.amount) return showToast('กรุณากรอกจำนวนเงิน', 'error');
+  try {
+    await apiFetch('/expenses', { method: 'POST', body: JSON.stringify(body) });
+    showToast('บันทึกรายจ่ายเรียบร้อย');
+    document.getElementById('e-amount').value = '';
+    document.getElementById('e-desc').value = '';
+    loadExpenses();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+async function loadExpenses() {
+  const el = document.getElementById('exp-list');
+  if (!el) return;
+  try {
+    const data = await apiFetch('/expenses');
+    if (!data.length) { el.innerHTML = '<div class="empty">ยังไม่มีรายการ</div>'; return; }
+    el.innerHTML = data.slice(0, 30).map(e => `
+      <div class="log-item">
+        <div class="log-badge out">จ่าย</div>
+        <div class="log-info">
+          <div class="log-name">${e.description}</div>
+          <div class="log-meta">${formatDate(e.date)}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div>
+            <div class="log-qty out">${formatThb(e.amount)}</div>
+          </div>
+          <button onclick="deleteExpense('${e.id}')" style="background:var(--red-bg);border:1px solid #3a2020;color:var(--red);border-radius:5px;padding:3px 8px;font-size:10px;cursor:pointer;">ลบ</button>
+        </div>
+      </div>`).join('');
+  } catch (e2) {
+    el.innerHTML = `<div class="empty">${e2.message}</div>`;
+  }
+}
+
+async function deleteExpense(id) {
+  if (!confirm('ยืนยันลบรายการนี้?')) return;
+  try {
+    await apiFetch(`/expenses/${id}`, { method: 'DELETE' });
+    showToast('ลบเรียบร้อย');
+    loadExpenses();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+init();
+</script>
+</body>
+</html>
