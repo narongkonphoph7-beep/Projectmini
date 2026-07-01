@@ -5,7 +5,7 @@
 ```
 douceur/
 ├── api/
-│   └── index.py          ← FastAPI backend (in-memory, ไม่มี DB)
+│   └── index.py          ← FastAPI backend (in-memory, ไม่มี  DB)
 ├── frontend/
 │   ├── assets/
 │   │   ├── css/style.css ← shared styles
