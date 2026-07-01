@@ -63,23 +63,8 @@ function renderShell(pageTitle = '') {
 
   <div class="main">
     <header class="topbar">
-      <div class="search-wrap">
-        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="opacity:0.3">
-          <circle cx="7" cy="7" r="4.5" stroke="#e2e8f0" stroke-width="1.5"/>
-          <path d="M10.5 10.5L13 13" stroke="#e2e8f0" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        <input class="search" placeholder="ค้นหา..."/>
-        <div class="kbd">/</div>
-      </div>
-      <div class="topbar-right">
-        <button class="icon-btn" title="แจ้งเตือน">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-            <path d="M8 2a4 4 0 0 1 4 4v3l1 2H3l1-2V6a4 4 0 0 1 4-4z" stroke="currentColor" stroke-width="1.2"/>
-            <path d="M6.5 13a1.5 1.5 0 0 0 3 0" stroke="currentColor" stroke-width="1.2"/>
-          </svg>
-          <div class="notif-dot"></div>
-        </button>
-        <button class="btn-outline">รายงาน</button>
+      <div class="topbar-left">
+        <span class="topbar-title">Douceur</span>
       </div>
     </header>
     <div class="content" id="page-content"></div>

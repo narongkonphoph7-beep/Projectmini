@@ -16,7 +16,7 @@ load_dotenv(dotenv_path=env_path)
 app = FastAPI(title="Douceur Bakery API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -104,50 +104,70 @@ def get_dashboard(period_type: str = "daily", selected_date: str = None):
     else:
         raise HTTPException(400, "Invalid period type")
 
-    # 3. ดึงยอดขายและรายจ่าย 
-    revenue = query(f"SELECT COALESCE(SUM(total_price),0) AS v FROM Sales WHERE {sql_cond}", (selected_date,), fetchone=True)["v"]
-    exp_amt = query(f"SELECT COALESCE(SUM(amount),0) AS v FROM Expenses WHERE {sql_cond}", (selected_date,), fetchone=True)["v"]
-    cogs = query(f"SELECT COALESCE(SUM(s.quantity * p.cost_price),0) AS v FROM Sales s JOIN Products p ON s.product_id=p.id WHERE {sql_cond_join}", (selected_date,), fetchone=True)["v"]
+    # 3. ดึงยอดขายและรายจ่าย (optimized: 1 query แทน 3)
+    combined = query(f"""
+        SELECT
+            (SELECT COALESCE(SUM(total_price),0) FROM Sales WHERE {sql_cond}) AS revenue,
+            (SELECT COALESCE(SUM(amount),0) FROM Expenses WHERE {sql_cond}) AS expenses,
+            (SELECT COALESCE(SUM(s.quantity * p.cost_price),0) FROM Sales s JOIN Products p ON s.product_id=p.id WHERE {sql_cond_join}) AS cogs
+    """, (selected_date, selected_date, selected_date), fetchone=True)
+    revenue = combined["revenue"]
+    exp_amt = combined["expenses"]
+    cogs = combined["cogs"]
     net_profit = float(revenue) - float(cogs) - float(exp_amt)
 
     best = query(f"SELECT p.name, SUM(s.quantity) AS qty FROM Sales s JOIN Products p ON s.product_id=p.id WHERE {sql_cond_join} GROUP BY p.name ORDER BY qty DESC LIMIT 1", (selected_date,), fetchone=True)
 
     breakdown = query(f"SELECT description AS label, SUM(amount) AS amount FROM Expenses WHERE {sql_cond} GROUP BY description ORDER BY amount DESC", (selected_date,), fetchall=True)
 
-    # 4. สร้างข้อมูลกราฟแท่ง (ให้หน้าเว็บอ่านค่าแกน X ได้ถูกต้อง)
+    # 4. สร้างข้อมูลกราฟแท่ง — optimized: ใช้ generate_series ลด 14 queries → 1-3 queries
     chart_data = []
     if period_type == "daily":
-        # กราฟ 7 วันล่าสุด
         base_date = date.fromisoformat(selected_date)
-        for i in range(6, -1, -1):
-            d = base_date - timedelta(days=i)
-            d_str = d.isoformat()
-            rev = query("SELECT COALESCE(SUM(total_price),0) AS v FROM Sales WHERE DATE(date)=%s", (d_str,), fetchone=True)["v"]
-            exp = query("SELECT COALESCE(SUM(amount),0) AS v FROM Expenses WHERE DATE(date)=%s", (d_str,), fetchone=True)["v"]
-            chart_data.append({"date": d_str, "revenue": float(rev), "expenses": float(exp)})
-            
+        start_date = (base_date - timedelta(days=6)).isoformat()
+        rows = query("""
+            SELECT d::date AS dt,
+                   COALESCE(SUM(s.total_price),0) AS revenue,
+                   COALESCE(SUM(e.amount),0) AS expenses
+            FROM generate_series(%s::date, %s::date, '1 day') d
+            LEFT JOIN Sales s ON DATE(s.date) = d::date
+            LEFT JOIN Expenses e ON DATE(e.date) = d::date
+            GROUP BY d::date ORDER BY d::date
+        """, (start_date, selected_date), fetchall=True)
+        chart_data = [{"date": r["dt"].isoformat(), "revenue": float(r["revenue"]), "expenses": float(r["expenses"])} for r in rows]
+
     elif period_type == "monthly":
-        # กราฟ 7 เดือนล่าสุด
-        year, month = map(int, selected_date.split("-"))
-        for i in range(6, -1, -1):
-            m = month - i
-            y = year
-            while m <= 0:
-                m += 12
-                y -= 1
-            m_str = f"{y:04d}-{m:02d}"
-            rev = query("SELECT COALESCE(SUM(total_price),0) AS v FROM Sales WHERE TO_CHAR(date, 'YYYY-MM')=%s", (m_str,), fetchone=True)["v"]
-            exp = query("SELECT COALESCE(SUM(amount),0) AS v FROM Expenses WHERE TO_CHAR(date, 'YYYY-MM')=%s", (m_str,), fetchone=True)["v"]
-            chart_data.append({"date": m_str, "revenue": float(rev), "expenses": float(exp)})
-            
+        base_date = date.fromisoformat(selected_date + "-01")
+        m = base_date.month - 6
+        y = base_date.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        start_date = date(y, m, 1).isoformat()
+        rows = query("""
+            SELECT to_char(d, 'YYYY-MM') AS dt,
+                   COALESCE(SUM(s.total_price),0) AS revenue,
+                   COALESCE(SUM(e.amount),0) AS expenses
+            FROM generate_series(%s::date, %s::date, '1 month') d
+            LEFT JOIN Sales s ON to_char(s.date, 'YYYY-MM') = to_char(d, 'YYYY-MM')
+            LEFT JOIN Expenses e ON to_char(e.date, 'YYYY-MM') = to_char(d, 'YYYY-MM')
+            GROUP BY to_char(d, 'YYYY-MM') ORDER BY to_char(d, 'YYYY-MM')
+        """, (start_date, base_date.isoformat()), fetchall=True)
+        chart_data = [{"date": r["dt"], "revenue": float(r["revenue"]), "expenses": float(r["expenses"])} for r in rows]
+
     elif period_type == "yearly":
-        # กราฟ 7 ปีล่าสุด
-        y = int(selected_date)
-        for i in range(6, -1, -1):
-            y_str = str(y - i)
-            rev = query("SELECT COALESCE(SUM(total_price),0) AS v FROM Sales WHERE TO_CHAR(date, 'YYYY')=%s", (y_str,), fetchone=True)["v"]
-            exp = query("SELECT COALESCE(SUM(amount),0) AS v FROM Expenses WHERE TO_CHAR(date, 'YYYY')=%s", (y_str,), fetchone=True)["v"]
-            chart_data.append({"date": y_str, "revenue": float(rev), "expenses": float(exp)})
+        base_year = int(selected_date)
+        start_year = base_year - 6
+        rows = query("""
+            SELECT to_char(d, 'YYYY') AS dt,
+                   COALESCE(SUM(s.total_price),0) AS revenue,
+                   COALESCE(SUM(e.amount),0) AS expenses
+            FROM generate_series(%s::date, %s::date, '1 year') d
+            LEFT JOIN Sales s ON to_char(s.date, 'YYYY') = to_char(d, 'YYYY')
+            LEFT JOIN Expenses e ON to_char(e.date, 'YYYY') = to_char(d, 'YYYY')
+            GROUP BY to_char(d, 'YYYY') ORDER BY to_char(d, 'YYYY')
+        """, (f"{start_year}-01-01", f"{base_year}-01-01"), fetchall=True)
+        chart_data = [{"date": r["dt"], "revenue": float(r["revenue"]), "expenses": float(r["expenses"])} for r in rows]
 
     low_stock = query("""
         SELECT p.id, p.name, p.category, p.low_stock_threshold,
@@ -185,16 +205,6 @@ def list_products():
                AS current_stock
         FROM Products p LEFT JOIN Inventory i ON p.id=i.product_id
         GROUP BY p.id ORDER BY p.id""", fetchall=True)
-
-@app.post("/api/sales", status_code=201)
-def create_sale(b: SaleCreate):
-    r = query("""
-        INSERT INTO Sales (total_price, payment_type, sale_type, date)
-        VALUES (%s,%s,%s,%s) RETURNING *""",
-        (b.amount, b.payment_type, b.sale_type,
-         b.date or date.today().isoformat()),
-        fetchone=True)
-    return r
 
 @app.put("/api/products/{pid}")
 def update_product(pid: int, b: ProductCreate):
@@ -238,23 +248,17 @@ def create_inventory(b: InventoryCreate):
 @app.get("/api/sales")
 def list_sales():
     return query("""
-        SELECT s.*, p.name AS product_name FROM Sales s
-        JOIN Products p ON s.product_id=p.id ORDER BY s.id DESC LIMIT 50""", fetchall=True)
+        SELECT s.*, COALESCE(p.name, '-') AS product_name FROM Sales s
+        LEFT JOIN Products p ON s.product_id=p.id ORDER BY s.id DESC LIMIT 50""", fetchall=True)
 
 @app.post("/api/sales", status_code=201)
 def create_sale(b: SaleCreate):
-    price = query("SELECT selling_price FROM Products WHERE id=%s",
-                  (b.product_id,), fetchone=True)
-    if not price: raise HTTPException(404,"Product not found")
-    total = round(b.quantity * float(price["selling_price"]), 2)
     r = query("""
-        INSERT INTO Sales (product_id,quantity,total_price,date)
+        INSERT INTO Sales (total_price, payment_type, sale_type, date)
         VALUES (%s,%s,%s,%s) RETURNING *""",
-        (b.product_id,b.quantity,total,b.date or date.today().isoformat()),
+        (b.amount, b.payment_type, b.sale_type,
+         b.date or date.today().isoformat()),
         fetchone=True)
-    # auto OUT inventory
-    query("INSERT INTO Inventory (product_id,type,quantity,note,date) VALUES (%s,'OUT',%s,'ขายสินค้า (auto)',%s)",
-          (b.product_id,b.quantity,b.date or date.today().isoformat()), commit=True)
     return r
 
 # ── Expenses ───────────────────────────────────────────────
