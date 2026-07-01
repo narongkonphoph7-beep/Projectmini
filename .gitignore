@@ -1,3 +1,25 @@
-.env
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+
+# Database (เก็บไว้เฉพาะ schema.sql ไม่ใช่ข้อมูล runtime)
+*.db
+*.sqlite
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git - ไฟล์พวกนี้จะไม่ถูกแทนที่เวลา pull
+/config.local.*
