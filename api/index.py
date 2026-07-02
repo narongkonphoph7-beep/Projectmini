@@ -31,21 +31,36 @@ def get_conn():
     global _pool
     if _pool is None:
         _pool = pg_pool.SimpleConnectionPool(1, 5, os.environ["DATABASE_URL"])
-    return _pool.getconn()
+    try:
+        conn = _pool.getconn()
+        # ทดสอบว่ายังเชื่อมต่ออยู่
+        conn.cursor().execute("SELECT 1")
+        return conn
+    except (psycopg2.InterfaceError, psycopg2.OperationalError):
+        # ถ้า connection หลุด ให้สร้าง pool ใหม่
+        try:
+            _pool.closeall()
+        except Exception:
+            pass
+        _pool = pg_pool.SimpleConnectionPool(1, 5, os.environ["DATABASE_URL"])
+        return _pool.getconn()
 
 def query(sql, params=(), fetchone=False, fetchall=False, commit=False):
     conn = get_conn()
     try:
-        with conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(sql, params)
-                if commit:
-                    return None
-                if fetchone:
-                    res = cur.fetchone()
-                    return dict(res) if res else None
-                if fetchall:
-                    return [dict(r) for r in cur.fetchall()]
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+        if commit:
+            conn.commit()
+            return None
+        if fetchone:
+            res = cur.fetchone()
+            return dict(res) if res else None
+        if fetchall:
+            return [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        conn.rollback()
+        raise e
     finally:
         _pool.putconn(conn) 
 
