@@ -23,3 +23,5 @@ Thumbs.db
 
 # Git - ไฟล์พวกนี้จะไม่ถูกแทนที่เวลา pull
 /config.local.*
+.vercel
+.env*

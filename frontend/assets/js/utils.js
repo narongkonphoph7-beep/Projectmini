@@ -1,4 +1,7 @@
-const API = 'http://localhost:8000/api';
+// Vercel ใช้ /api (relative) ส่วน local dev ใช้ localhost:8000
+const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? 'http://localhost:8000/api'
+  : '/api';
 
 async function apiFetch(path, options = {}) {
   const res = await fetch(API + path, {
